@@ -16,9 +16,11 @@
 #include <sys/mount.h>
 #include <linux/magic.h>
 #include <algorithm>
+#include <fstream>
 #include <vector>
 #include <string>
 #include <set>
+#include <regex>
 #include "lib/miniz/miniz.h"
 #include "osd.h"
 #include "fpga_io.h"
@@ -38,6 +40,9 @@
 
 typedef std::vector<direntext_t> DirentVector;
 typedef std::set<std::string> DirNameSet;
+
+/* Max. length for entries within the .showlist and .hidelist files. */
+constexpr int MAX_LINE_LENGTH = 4096;
 
 static const size_t YieldIterations = 128;
 
@@ -1442,6 +1447,124 @@ static void get_display_name(direntext_t *dext, const char *ext, int options)
 	if (fext) *fext = 0;
 }
 
+/* Returns a string with leading and trailing white-spaces removed. */
+/* NOTE: This operation might change the content of s by shortening it. */
+char *trim(char *s) {
+	/* Trim right side of the string. */
+	char *end_ptr = s + strlen(s) - 1;
+	while (end_ptr >= s && isspace(*end_ptr)) {
+		*(end_ptr--) = '\0';
+	}
+	/* Trim left side of the string. */
+	char *start_ptr = s;
+	/* NOTE: isspace() evaluates to false for the terminating zero. */
+	while (isspace(*start_ptr)) { start_ptr++; }
+	/* Note that we also copy the terminating null-byte. */
+	//memmove(s, start_ptr, strlen(start_ptr) + 1);
+	//return s;
+	return start_ptr;
+}
+
+/* Escapes special characters of ECMAScript regex syntax. */
+/* Content inside `...` quotes is not affected (copied as is). */
+const char *escape_special(const char *s) {
+	static char buffer[2*MAX_LINE_LENGTH];
+	char *out_ptr = &buffer[0];
+	/* Local lambda that returns the amount of space left in the buffer. */
+	auto space_left = [out_ptr]() -> size_t
+		{ return sizeof(buffer) - (out_ptr - buffer); };
+	const char *in_ptr = s;
+	bool escape = true;
+	do {
+		switch (*in_ptr) {
+			case '`':
+				escape = !escape;
+			break;
+
+			case '^':
+			case '$':
+			case '\\':
+			case '.':
+			case '*':
+			case '+':
+			case '?':
+			case '(':
+			case ')':
+			case '[':
+			case ']':
+			case '{':
+			case '}':
+			case '|':
+				if (escape) {
+					if (space_left() < 1) {
+						return nullptr;
+					}
+					*(out_ptr++) = '\\';
+				}
+			/* INTENTIONAL FALL-THROUGH */
+
+			default:
+				if (space_left() < 1) {
+					return nullptr;
+				}
+				*(out_ptr++) = *in_ptr;
+			break;
+		}
+	} while (*(in_ptr++) != '\0');
+	return buffer;
+}
+
+/* Generic function to read and parse the .showlist or .hidelist files. */
+bool read_list(const char *path,
+               const char *filename,
+               std::vector<std::regex>& regex_v /* output */) {
+	std::string filepath;
+	filepath += (path != nullptr ? path : ".");
+	filepath += "/";
+	filepath += filename;
+	regex_v.clear();
+	try {
+		std::ifstream ifs(filepath);
+		if (ifs.good()) {
+			char line[MAX_LINE_LENGTH]; /* buffer to read one line */
+			while (ifs.getline(line, sizeof(line))) {
+				const char *pattern = escape_special(trim(line));
+				try {
+					regex_v.push_back(std::regex(pattern));
+				}
+				catch (std::regex_error& e) {
+					/* REGEX FORMAT ERROR */
+					//cerr << "Regex format error: " << pattern << endl;
+					//return false;
+				}
+				//cout << pattern << endl;
+			}
+			ifs.close();
+			return true;
+		}
+		else {
+			/* FAILURE TO OPEN FILE */
+			//cerr << "File not found: " << filepath << endl;
+			return false;
+		}
+	}
+	catch (const std::ifstream::failure& e) {
+		/* FILE/IO ERROR */
+		//cerr << "FILE/IO error reading: " << filepath << endl;
+		return false;
+	}
+}
+
+/* Reads and parses the .showlist file, populating the show_regex_v argument. */
+bool read_showlist(const char *path, std::vector<std::regex>& show_regex_v) {
+	return read_list(path, ".showlist", show_regex_v);
+}
+
+/* Reads and parses the .hidelist file, populating the hide_regex_v argument. */
+bool read_hidelist(const char *path, std::vector<std::regex>& hide_regex_v) {
+	return read_list(path, ".hidelist", hide_regex_v);
+}
+
 int ScanDirectory(char* path, int mode, const char *extension, int options, const char *prefix, const char *filter)
 {
 	static char file_name[1024];
@@ -1526,6 +1649,20 @@ int ScanDirectory(char* path, int mode, const char *extension, int options, cons
 			}
 		}
 
+		/* Regex patterns obtained from .showlist and .hidelist files. */
+		std::vector<std::regex> show_regex_v;
+		std::vector<std::regex> hide_regex_v;
+		bool showlist_present = false;
+		bool hidelist_present = false;
+
+		/* Read and parse .showlist and .hidelist files, if present. */
+		/* @TODO: Currently, this does not work for zipped folders yet! */
+		if (!is_zipped)
+		{
+			showlist_present = read_showlist(full_path, show_regex_v);
+			hidelist_present = read_hidelist(full_path, hide_regex_v);
+		}
+
 		struct dirent64 *de = nullptr;
 		for (size_t i = 0; (d && (de = readdir64(d)))
 				 || (z && i < mz_zip_reader_get_num_files(z)); i++)
@@ -1608,6 +1745,25 @@ int ScanDirectory(char* path, int mode, const char *extension, int options, cons
 					}
 				}
 			}
+
+			/* If .showlist is not present, entries are visible by default. */
+			/* Otherwise, they must match at least one pattern in .showlist. */
+			bool visible = !showlist_present;
+			if (showlist_present) {
+				for(auto it = std::begin(show_regex_v);
+						!visible && it != std::end(show_regex_v); it++) {
+					if (std::regex_match(de->d_name, *it)) { visible = true; }
+				}
+			}
+			/* Entries matching a pattern in .hidelist are always hidden. */
+			if (hidelist_present) {
+				for(auto it = std::begin(hide_regex_v);
+						visible && it != std::end(hide_regex_v); it++) {
+					if (std::regex_match(de->d_name, *it)) { visible = false; }
+				}
+			}
+			/* Continue if entry is not visible according to the patterns. */
+			if (!visible) { continue; }
 
             if (filter)
 			{

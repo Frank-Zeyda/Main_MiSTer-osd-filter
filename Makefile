@@ -3,12 +3,24 @@ SHELL = /bin/bash -o pipefail
 
 MAKEFLAGS += "-j $(shell nproc)"
 
+# Optional location of the ARM gcc toolchain used for cross-compilation:
+# the directory holding the arm-none-linux-gnueabihf-* binaries. If left
+# empty, the tools are expected to be found via PATH. Example:
+#   make TOOLCHAIN=toolchain/gcc-arm-10.2-2020.11-x86_64-arm-none-linux-gnueabihf/bin
+TOOLCHAIN ?=
+
 # using gcc version 10.2.1
 BASE    = arm-none-linux-gnueabihf
 
+ifneq ($(TOOLCHAIN),)
+CC      = $(TOOLCHAIN)/$(BASE)-gcc
+LD      = $(TOOLCHAIN)/$(BASE)-ld
+STRIP   = $(TOOLCHAIN)/$(BASE)-strip
+else
 CC      = $(BASE)-gcc
 LD      = $(BASE)-ld
 STRIP   = $(BASE)-strip
+endif
 
 ifeq ($(V),1)
 	Q :=
