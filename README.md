@@ -78,10 +78,13 @@ must match the *entire* on-disk name of a file or folder.
   `names.txt`, stripped extensions, etc. are applied *after* filtering).
 - A name must match a pattern **completely**; `Sonic` does *not* match
   `Sonic.md`. Use e.g. ``Sonic`.*` `` to match by prefix.
-- Leading and trailing whitespace is trimmed (Windows/DOS line endings are
-  handled), empty lines are skipped, and a line that results in an invalid
-  regular expression is silently ignored. Lines are limited to 4095
-  characters.
+- Lines starting with `#` or `;` are treated as comments, so lists can be
+  annotated. To match a name that itself starts with one of these
+  characters, begin the line with backticks, e.g. `` `#`recycle ``.
+- Leading and trailing whitespace is trimmed (Windows/DOS line endings and
+  a UTF-8 byte-order mark are handled) and empty lines are skipped. A line
+  that results in an invalid regular expression is ignored, with a warning
+  in the MiSTer log.
 
 ## Examples
 

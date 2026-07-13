@@ -16,7 +16,6 @@
 #include <sys/mount.h>
 #include <linux/magic.h>
 #include <algorithm>
-#include <fstream>
 #include <vector>
 #include <string>
 #include <set>
@@ -40,9 +39,6 @@
 
 typedef std::vector<direntext_t> DirentVector;
 typedef std::set<std::string> DirNameSet;
-
-/* Max. length for entries within the .showlist and .hidelist files. */
-constexpr int MAX_LINE_LENGTH = 4096;
 
 static const size_t YieldIterations = 128;
 
@@ -1447,132 +1443,148 @@ static void get_display_name(direntext_t *dext, const char *ext, int options)
 	if (fext) *fext = 0;
 }
 
-/* Returns a string with leading and trailing white-spaces removed. */
-/* NOTE: This operation might change the content of s by shortening it. */
-static char *trim(char *s) {
-	/* Trim right side of the string. */
-	char *end_ptr = s + strlen(s);
-	while (end_ptr > s && isspace((unsigned char)end_ptr[-1])) {
-		*(--end_ptr) = '\0';
-	}
-	/* Trim left side of the string. */
-	char *start_ptr = s;
-	/* NOTE: isspace() evaluates to false for the terminating zero. */
-	while (isspace((unsigned char)*start_ptr)) { start_ptr++; }
-	return start_ptr;
+// Returns a copy of s with leading and trailing whitespace removed.
+static std::string trim(const char *s)
+{
+	while (isspace((unsigned char)*s)) s++;
+	size_t len = strlen(s);
+	while (len > 0 && isspace((unsigned char)s[len - 1])) len--;
+	return std::string(s, len);
 }
 
-/* Escapes special characters of ECMAScript regex syntax. */
-/* Content inside `...` quotes is not affected (copied as is). */
-static const char *escape_special(const char *s) {
-	static char buffer[2*MAX_LINE_LENGTH];
-	char *out_ptr = &buffer[0];
-	/* Local lambda that returns the amount of space left in the buffer. */
-	auto space_left = [&out_ptr]() -> size_t
-		{ return sizeof(buffer) - (out_ptr - buffer); };
-	const char *in_ptr = s;
+// Escapes special characters of ECMAScript regex syntax, so that patterns
+// match literally by default. Content inside `...` quotes is not escaped
+// (copied as is), allowing raw regex fragments to be embedded.
+static std::string escape_special(const std::string &s)
+{
+	std::string result;
+	result.reserve(2 * s.length());
 	bool escape = true;
-	do {
-		switch (*in_ptr) {
-			case '`':
-				escape = !escape;
+	for (char c : s)
+	{
+		switch (c)
+		{
+		case '`':
+			escape = !escape;
 			break;
 
-			case '^':
-			case '$':
-			case '\\':
-			case '.':
-			case '*':
-			case '+':
-			case '?':
-			case '(':
-			case ')':
-			case '[':
-			case ']':
-			case '{':
-			case '}':
-			case '|':
-				if (escape) {
-					if (space_left() < 1) {
-						return nullptr;
-					}
-					*(out_ptr++) = '\\';
-				}
-			/* INTENTIONAL FALL-THROUGH */
+		case '^': case '$': case '\\': case '.': case '*': case '+': case '?':
+		case '(': case ')': case '[': case ']': case '{': case '}': case '|':
+			if (escape) result += '\\';
+			// INTENTIONAL FALL-THROUGH
 
-			default:
-				if (space_left() < 1) {
-					return nullptr;
-				}
-				*(out_ptr++) = *in_ptr;
+		default:
+			result += c;
 			break;
 		}
-	} while (*(in_ptr++) != '\0');
-	return buffer;
+	}
+	return result;
 }
 
-/* Generic function to read and parse the .showlist or .hidelist files. */
-static bool read_list(const char *path,
-               const char *filename,
-               std::vector<std::regex>& regex_v /* output */) {
-	std::string filepath;
-	filepath += (path != nullptr ? path : ".");
-	filepath += "/";
-	filepath += filename;
+// Generic function that reads and parses a .showlist or .hidelist file.
+// Returns true iff the file exists; regex_v receives its patterns.
+// Note that FileReadLine() skips empty lines and #/; comment lines.
+static bool read_list(const char *path, const char *filename, std::vector<std::regex> &regex_v)
+{
 	regex_v.clear();
-	try {
-		std::ifstream ifs(filepath);
-		if (ifs.good()) {
-			char line[MAX_LINE_LENGTH]; /* buffer to read one line */
-			while (ifs.getline(line, sizeof(line))) {
-				const char *pattern = escape_special(trim(line));
-				/* Skip lines whose escaped form overflows the buffer, */
-				/* as well as (trimmed) empty lines. */
-				if (pattern == nullptr || *pattern == '\0') { continue; }
-				try {
-					regex_v.push_back(std::regex(pattern));
-				}
-				catch (std::regex_error& e) {
-					/* REGEX FORMAT ERROR */
-					//cerr << "Regex format error: " << pattern << endl;
-					//return false;
-				}
-				//cout << pattern << endl;
-			}
-			ifs.close();
-			return true;
+
+	char filepath[1024 + 32];
+	snprintf(filepath, sizeof(filepath), "%s/%s", path, filename);
+
+	fileTextReader reader;
+	if (!FileOpenTextReader(&reader, filepath))
+	{
+		// Opening an existing but empty file fails as well, in which
+		// case the list counts as present, with no patterns.
+		return FileExists(filepath);
+	}
+
+	// Skip a leading UTF-8 byte-order mark (e.g. from Windows editors).
+	if (reader.size >= 3 && !memcmp(reader.pos, "\xEF\xBB\xBF", 3)) reader.pos += 3;
+
+	const char *line;
+	while ((line = FileReadLine(&reader)))
+	{
+		std::string pattern = escape_special(trim(line));
+		if (pattern.empty()) continue;
+		try
+		{
+			regex_v.push_back(std::regex(pattern));
 		}
-		else {
-			/* FAILURE TO OPEN FILE */
-			//cerr << "File not found: " << filepath << endl;
-			return false;
+		catch (std::regex_error &)
+		{
+			printf("Invalid pattern in %s: %s\n", filepath, line);
 		}
 	}
-	catch (const std::ifstream::failure& e) {
-		/* FILE/IO ERROR */
-		//cerr << "FILE/IO error reading: " << filepath << endl;
-		return false;
-	}
+	return true;
 }
 
-/* Reads and parses the .showlist file, populating the show_regex_v argument. */
-static bool read_showlist(const char *path, std::vector<std::regex>& show_regex_v) {
+// Reads and parses the .showlist file, populating the show_regex_v argument.
+static bool read_showlist(const char *path, std::vector<std::regex> &show_regex_v)
+{
 	return read_list(path, ".showlist", show_regex_v);
 }
 
-/* Reads and parses the .hidelist file, populating the hide_regex_v argument. */
-static bool read_hidelist(const char *path, std::vector<std::regex>& hide_regex_v) {
+// Reads and parses the .hidelist file, populating the hide_regex_v argument.
+static bool read_hidelist(const char *path, std::vector<std::regex> &hide_regex_v)
+{
 	return read_list(path, ".hidelist", hide_regex_v);
 }
 
-/* Checks for the presence of a .nomedia marker file in the given directory. */
-/* Only the existence of the file matters; its content is ignored. */
-static bool has_nomedia(const char *path) {
-	std::string filepath;
-	filepath += (path != nullptr ? path : ".");
-	filepath += "/";
-	filepath += ".nomedia";
-	return (access(filepath.c_str(), F_OK) == 0);
+// Checks for the presence of a .nomedia marker file in the given directory.
+// Only the existence of the file matters; its content is ignored.
+static bool has_nomedia(const char *path)
+{
+	char filepath[1024 + 32];
+	snprintf(filepath, sizeof(filepath), "%s/%s", path, ".nomedia");
+	return FileExists(filepath);
+}
+
+// Visibility filters that control which entries of the scanned directory
+// are shown in the OSD file browser (cf. Main_MiSTer issue #443).
+struct dir_filters
+{
+	std::vector<std::regex> show_regex_v;
+	std::vector<std::regex> hide_regex_v;
+	bool showlist_present = false;
+	bool hidelist_present = false;
+	bool nomedia_present = false;
+};
+
+// Reads the .showlist, .hidelist and .nomedia filters of the given directory.
+static void read_filters(const char *path, dir_filters &filters)
+{
+	filters.showlist_present = read_showlist(path, filters.show_regex_v);
+	filters.hidelist_present = read_hidelist(path, filters.hide_regex_v);
+	filters.nomedia_present = has_nomedia(path);
+}
+
+// Decides whether a directory entry is visible according to the filters.
+static bool entry_visible(const dir_filters &filters, const char *name, unsigned char d_type)
+{
+	// A .nomedia marker hides all regular files within the directory,
+	// whereas subfolders remain visible.
+	if (filters.nomedia_present && d_type == DT_REG) return false;
+
+	// The parent-directory entry ("..") is exempt from filtering, so
+	// that upward navigation always remains possible.
+	if (!strcmp(name, "..")) return true;
+
+	// If .showlist is not present, entries are visible by default.
+	// Otherwise, they must match at least one pattern in .showlist.
+	bool visible = !filters.showlist_present;
+	for (auto it = filters.show_regex_v.begin(); !visible && it != filters.show_regex_v.end(); it++)
+	{
+		if (std::regex_match(name, *it)) visible = true;
+	}
+
+	// Entries matching a pattern in .hidelist are always hidden.
+	for (auto it = filters.hide_regex_v.begin(); visible && it != filters.hide_regex_v.end(); it++)
+	{
+		if (std::regex_match(name, *it)) visible = false;
+	}
+
+	return visible;
 }
 
 int ScanDirectory(char* path, int mode, const char *extension, int options, const char *prefix, const char *filter)
@@ -1659,22 +1671,11 @@ int ScanDirectory(char* path, int mode, const char *extension, int options, cons
 			}
 		}
 
-		/* Regex patterns obtained from .showlist and .hidelist files. */
-		std::vector<std::regex> show_regex_v;
-		std::vector<std::regex> hide_regex_v;
-		bool showlist_present = false;
-		bool hidelist_present = false;
-		bool nomedia_present = false;
-
-		/* Read and parse .showlist and .hidelist files, if present, and */
-		/* check for a .nomedia marker file (cf. Main_MiSTer issue #443). */
-		/* @TODO: Currently, this does not work for zipped folders yet! */
-		if (!is_zipped)
-		{
-			showlist_present = read_showlist(full_path, show_regex_v);
-			hidelist_present = read_hidelist(full_path, hide_regex_v);
-			nomedia_present = has_nomedia(full_path);
-		}
+		// Visibility filters (.showlist/.hidelist/.nomedia) of the scanned
+		// directory, cf. Main_MiSTer issue #443.
+		// @TODO: Currently, this does not work for zipped folders yet!
+		dir_filters filters;
+		if (!is_zipped) read_filters(full_path, filters);
 
 		struct dirent64 *de = nullptr;
 		for (size_t i = 0; (d && (de = readdir64(d)))
@@ -1759,33 +1760,9 @@ int ScanDirectory(char* path, int mode, const char *extension, int options, cons
 				}
 			}
 
-			/* A .nomedia marker file hides all regular files within the */
-			/* directory, whereas subfolders remain visible. */
-			if (nomedia_present && de->d_type == DT_REG) { continue; }
-
-			/* The parent-directory entry ("..") is exempt from filtering, */
-			/* so that upward navigation always remains possible. */
-			if ((showlist_present || hidelist_present) && strcmp(de->d_name, ".."))
-			{
-				/* If .showlist is not present, entries are visible by default. */
-				/* Otherwise, they must match at least one pattern in .showlist. */
-				bool visible = !showlist_present;
-				if (showlist_present) {
-					for(auto it = std::begin(show_regex_v);
-							!visible && it != std::end(show_regex_v); it++) {
-						if (std::regex_match(de->d_name, *it)) { visible = true; }
-					}
-				}
-				/* Entries matching a pattern in .hidelist are always hidden. */
-				if (hidelist_present) {
-					for(auto it = std::begin(hide_regex_v);
-							visible && it != std::end(hide_regex_v); it++) {
-						if (std::regex_match(de->d_name, *it)) { visible = false; }
-					}
-				}
-				/* Continue if entry is not visible according to the patterns. */
-				if (!visible) { continue; }
-			}
+			// Skip entries concealed by the .showlist/.hidelist/.nomedia
+			// visibility filters.
+			if (!entry_visible(filters, de->d_name, de->d_type)) continue;
 
             if (filter)
 			{
