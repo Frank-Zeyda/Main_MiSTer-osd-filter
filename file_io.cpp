@@ -1449,29 +1449,26 @@ static void get_display_name(direntext_t *dext, const char *ext, int options)
 
 /* Returns a string with leading and trailing white-spaces removed. */
 /* NOTE: This operation might change the content of s by shortening it. */
-char *trim(char *s) {
+static char *trim(char *s) {
 	/* Trim right side of the string. */
-	char *end_ptr = s + strlen(s) - 1;
-	while (end_ptr >= s && isspace(*end_ptr)) {
-		*(end_ptr--) = '\0';
+	char *end_ptr = s + strlen(s);
+	while (end_ptr > s && isspace((unsigned char)end_ptr[-1])) {
+		*(--end_ptr) = '\0';
 	}
 	/* Trim left side of the string. */
 	char *start_ptr = s;
 	/* NOTE: isspace() evaluates to false for the terminating zero. */
-	while (isspace(*start_ptr)) { start_ptr++; }
-	/* Note that we also copy the terminating null-byte. */
-	//memmove(s, start_ptr, strlen(start_ptr) + 1);
-	//return s;
+	while (isspace((unsigned char)*start_ptr)) { start_ptr++; }
 	return start_ptr;
 }
 
 /* Escapes special characters of ECMAScript regex syntax. */
 /* Content inside `...` quotes is not affected (copied as is). */
-const char *escape_special(const char *s) {
+static const char *escape_special(const char *s) {
 	static char buffer[2*MAX_LINE_LENGTH];
 	char *out_ptr = &buffer[0];
 	/* Local lambda that returns the amount of space left in the buffer. */
-	auto space_left = [out_ptr]() -> size_t
+	auto space_left = [&out_ptr]() -> size_t
 		{ return sizeof(buffer) - (out_ptr - buffer); };
 	const char *in_ptr = s;
 	bool escape = true;
@@ -1515,7 +1512,7 @@ const char *escape_special(const char *s) {
 }
 
 /* Generic function to read and parse the .showlist or .hidelist files. */
-bool read_list(const char *path,
+static bool read_list(const char *path,
                const char *filename,
                std::vector<std::regex>& regex_v /* output */) {
 	std::string filepath;
@@ -1529,6 +1526,9 @@ bool read_list(const char *path,
 			char line[MAX_LINE_LENGTH]; /* buffer to read one line */
 			while (ifs.getline(line, sizeof(line))) {
 				const char *pattern = escape_special(trim(line));
+				/* Skip lines whose escaped form overflows the buffer, */
+				/* as well as (trimmed) empty lines. */
+				if (pattern == nullptr || *pattern == '\0') { continue; }
 				try {
 					regex_v.push_back(std::regex(pattern));
 				}
@@ -1556,12 +1556,12 @@ bool read_list(const char *path,
 }
 
 /* Reads and parses the .showlist file, populating the show_regex_v argument. */
-bool read_showlist(const char *path, std::vector<std::regex>& show_regex_v) {
+static bool read_showlist(const char *path, std::vector<std::regex>& show_regex_v) {
 	return read_list(path, ".showlist", show_regex_v);
 }
 
 /* Reads and parses the .hidelist file, populating the hide_regex_v argument. */
-bool read_hidelist(const char *path, std::vector<std::regex>& hide_regex_v) {
+static bool read_hidelist(const char *path, std::vector<std::regex>& hide_regex_v) {
 	return read_list(path, ".hidelist", hide_regex_v);
 }
 
@@ -1746,24 +1746,29 @@ int ScanDirectory(char* path, int mode, const char *extension, int options, cons
 				}
 			}
 
-			/* If .showlist is not present, entries are visible by default. */
-			/* Otherwise, they must match at least one pattern in .showlist. */
-			bool visible = !showlist_present;
-			if (showlist_present) {
-				for(auto it = std::begin(show_regex_v);
-						!visible && it != std::end(show_regex_v); it++) {
-					if (std::regex_match(de->d_name, *it)) { visible = true; }
+			/* The parent-directory entry ("..") is exempt from filtering, */
+			/* so that upward navigation always remains possible. */
+			if ((showlist_present || hidelist_present) && strcmp(de->d_name, ".."))
+			{
+				/* If .showlist is not present, entries are visible by default. */
+				/* Otherwise, they must match at least one pattern in .showlist. */
+				bool visible = !showlist_present;
+				if (showlist_present) {
+					for(auto it = std::begin(show_regex_v);
+							!visible && it != std::end(show_regex_v); it++) {
+						if (std::regex_match(de->d_name, *it)) { visible = true; }
+					}
 				}
-			}
-			/* Entries matching a pattern in .hidelist are always hidden. */
-			if (hidelist_present) {
-				for(auto it = std::begin(hide_regex_v);
-						visible && it != std::end(hide_regex_v); it++) {
-					if (std::regex_match(de->d_name, *it)) { visible = false; }
+				/* Entries matching a pattern in .hidelist are always hidden. */
+				if (hidelist_present) {
+					for(auto it = std::begin(hide_regex_v);
+							visible && it != std::end(hide_regex_v); it++) {
+						if (std::regex_match(de->d_name, *it)) { visible = false; }
+					}
 				}
+				/* Continue if entry is not visible according to the patterns. */
+				if (!visible) { continue; }
 			}
-			/* Continue if entry is not visible according to the patterns. */
-			if (!visible) { continue; }
 
             if (filter)
 			{
