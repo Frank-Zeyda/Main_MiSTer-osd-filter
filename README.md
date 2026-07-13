@@ -1,13 +1,15 @@
-# Main_MiSTer with `.showlist` / `.hidelist` support
+# Main_MiSTer with `.showlist` / `.hidelist` / `.nomedia` support
 
 This is a fork of [MiSTer-devel/Main_MiSTer](https://github.com/MiSTer-devel/Main_MiSTer)
 (the main binary of the [MiSTer FPGA](https://github.com/MiSTer-devel/Wiki_MiSTer/wiki)
-project) that adds two optional, per-directory configuration files —
-**`.showlist`** and **`.hidelist`** — giving fine-grained control over which
+project) that adds three optional, per-directory files — **`.showlist`**,
+**`.hidelist`** and **`.nomedia`** — giving fine-grained control over which
 files and folders appear in the OSD file browser.
 
-The feature was proposed upstream in
-[MiSTer-devel/Main_MiSTer#443](https://github.com/MiSTer-devel/Main_MiSTer/issues/443).
+The features were proposed upstream in
+[MiSTer-devel/Main_MiSTer#443](https://github.com/MiSTer-devel/Main_MiSTer/issues/443);
+the `.nomedia` marker follows the suggestion made by the upstream maintainer
+in that discussion.
 
 ## Motivation
 
@@ -19,13 +21,14 @@ without moving, renaming, or deleting anything on the card.
 
 ## How it works
 
-Whenever the OSD scans a directory, it additionally looks for two optional
+Whenever the OSD scans a directory, it additionally looks for three optional
 files *in that same directory*:
 
 | File | Effect |
 | --- | --- |
 | `.showlist` | Whitelist — if present, only entries that match at least one of its patterns are shown. |
 | `.hidelist` | Blacklist — entries that match any of its patterns are hidden, even if they also match `.showlist`. |
+| `.nomedia` | Marker (Android-style) — if the file merely exists, all regular files in the directory are hidden; subfolders remain visible. Its content is ignored, so an empty file suffices. |
 
 Further notes on the semantics:
 
@@ -36,8 +39,13 @@ Further notes on the semantics:
   there can hide entire sections such as `_Utility` from the main menu.
 - The parent-directory entry (`..`) is never filtered, so you can always
   navigate back up.
-- If neither file is present, behaviour is identical to stock firmware.
-- The lists are re-read on every directory scan, so changes (e.g. made over
+- `.nomedia` is evaluated first: files it hides cannot be brought back by a
+  `.showlist`. Subfolders remain subject to both lists, so `.nomedia` and a
+  `.hidelist` (for folders) can be combined. Since detecting the marker is a
+  single file-existence check, it adds virtually no processing cost.
+- If none of these files are present, behaviour is identical to stock
+  firmware.
+- The files are re-read on every directory scan, so changes (e.g. made over
   SSH or Samba) take effect the next time the directory is opened — no
   reboot required.
 
@@ -101,6 +109,14 @@ _Utility
 _Console
 ```
 
+Hide the (auto-updated) MRA files in `_Arcade` while keeping your own
+curated subfolders visible — the original use case from
+[#443](https://github.com/MiSTer-devel/Main_MiSTer/issues/443):
+
+```
+ssh root@<mister-ip> 'touch /media/fat/_Arcade/.nomedia'
+```
+
 Since the OSD browser itself hides dot-files, create and edit these lists
 from a PC (card reader), over Samba, or via SSH, e.g.:
 
@@ -114,9 +130,9 @@ EOF
 
 - Filtering does **not** apply *inside* ZIP archives browsed as folders
   (the ZIP file itself, being a regular directory entry, can be hidden).
-- The `.nomedia` marker file mentioned in early drafts of the proposal is
-  not implemented; use a `.hidelist` in the parent directory to hide a
-  folder instead.
+- ZIP archives count as regular files, so `.nomedia` hides them too, even
+  though the OSD would otherwise present them like folders.
+- `.nomedia` does not hide folders; use a `.hidelist` for that.
 - Names are matched byte-wise; no Unicode case folding.
 
 ## Building

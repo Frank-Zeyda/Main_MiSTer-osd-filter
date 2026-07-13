@@ -1565,6 +1565,16 @@ static bool read_hidelist(const char *path, std::vector<std::regex>& hide_regex_
 	return read_list(path, ".hidelist", hide_regex_v);
 }
 
+/* Checks for the presence of a .nomedia marker file in the given directory. */
+/* Only the existence of the file matters; its content is ignored. */
+static bool has_nomedia(const char *path) {
+	std::string filepath;
+	filepath += (path != nullptr ? path : ".");
+	filepath += "/";
+	filepath += ".nomedia";
+	return (access(filepath.c_str(), F_OK) == 0);
+}
+
 int ScanDirectory(char* path, int mode, const char *extension, int options, const char *prefix, const char *filter)
 {
 	static char file_name[1024];
@@ -1654,13 +1664,16 @@ int ScanDirectory(char* path, int mode, const char *extension, int options, cons
 		std::vector<std::regex> hide_regex_v;
 		bool showlist_present = false;
 		bool hidelist_present = false;
+		bool nomedia_present = false;
 
-		/* Read and parse .showlist and .hidelist files, if present. */
+		/* Read and parse .showlist and .hidelist files, if present, and */
+		/* check for a .nomedia marker file (cf. Main_MiSTer issue #443). */
 		/* @TODO: Currently, this does not work for zipped folders yet! */
 		if (!is_zipped)
 		{
 			showlist_present = read_showlist(full_path, show_regex_v);
 			hidelist_present = read_hidelist(full_path, hide_regex_v);
+			nomedia_present = has_nomedia(full_path);
 		}
 
 		struct dirent64 *de = nullptr;
@@ -1745,6 +1758,10 @@ int ScanDirectory(char* path, int mode, const char *extension, int options, cons
 					}
 				}
 			}
+
+			/* A .nomedia marker file hides all regular files within the */
+			/* directory, whereas subfolders remain visible. */
+			if (nomedia_present && de->d_type == DT_REG) { continue; }
 
 			/* The parent-directory entry ("..") is exempt from filtering, */
 			/* so that upward navigation always remains possible. */
