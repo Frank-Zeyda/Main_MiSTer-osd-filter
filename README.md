@@ -1,5 +1,7 @@
 # Main_MiSTer with `.showlist` / `.hidelist` / `.nomedia` support
 
+![tests](https://github.com/Frank-Zeyda/Main_MiSTer-osd-filter/actions/workflows/test.yml/badge.svg)
+
 This is a fork of [MiSTer-devel/Main_MiSTer](https://github.com/MiSTer-devel/Main_MiSTer)
 (the main binary of the [MiSTer FPGA](https://github.com/MiSTer-devel/Wiki_MiSTer/wiki)
 project) that adds three optional, per-directory files — **`.showlist`**,

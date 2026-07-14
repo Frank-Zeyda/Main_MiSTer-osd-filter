@@ -1,0 +1,42 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  host-tests:
+    name: Host unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run unit tests
+        run: make -C test
+
+      - name: Run under AddressSanitizer/UBSan
+        run: make -C test clean && make -C test sanitize
+
+      - name: Coverage of the extracted helpers
+        run: |
+          sudo apt-get update -q && sudo apt-get install -y -q clang llvm
+          make -C test clean
+          make -C test coverage CXX=clang++ | tee coverage-summary.txt
+          # Require 100% on all four metrics (regions, functions, lines, branches).
+          [ "$(grep 'helpers.inc ' coverage-summary.txt | grep -o '100.00%' | wc -l)" -eq 4 ] || \
+            { echo "ERROR: coverage of helpers.inc dropped below 100%"; exit 1; }
+
+  cross-build:
+    name: ARM cross-build (MiSTer binary)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build toolchain image (upstream devcontainer)
+        run: docker build -t mister-toolchain .devcontainer
+
+      - name: Cross-compile bin/MiSTer
+        run: |
+          docker run --rm -v "$PWD":/src -w /src mister-toolchain \
+            bash -c 'PATH="$PATH:$(echo /usr/local/bin/gcc-arm-*/bin)" make'
+          file bin/MiSTer | grep -q "ARM" || { echo "ERROR: unexpected binary format"; exit 1; }
