@@ -37,6 +37,11 @@
 
 #define MIN(a,b) (((a)<(b)) ? (a) : (b))
 
+// Application-specific maximum length of file-path buffers: deliberately
+// more frugal than PATH_MAX from <limits.h> (4096 on Linux), which would
+// waste memory in the HPS environment.
+#define APP_PATH_MAX 1024
+
 typedef std::vector<direntext_t> DirentVector;
 typedef std::set<std::string> DirNameSet;
 
@@ -59,7 +64,7 @@ static mz_zip_archive last_zip_archive = {};
 static int last_zip_fd = -1;
 static FILE *last_zip_cfile = NULL;
 static char last_zip_fname[256] = {};
-static char scanned_path[1024] = {};
+static char scanned_path[APP_PATH_MAX] = {};
 static int scanned_opts = 0;
 
 static int iSelectedEntry = 0;       // selected entry index
@@ -1006,12 +1011,12 @@ static int findPrefixDir(const char *prefix, bool no_prefix_check, char *dir, si
 	// no_prefix_check enables the legacy layout where system folders lived
 	// directly at the storage root (e.g. /media/fat/SNES). That layout is
 	// no longer recommended; prefer <prefix>/<dir>.
-	static char temp_dir[1024];
+	static char temp_dir[APP_PATH_MAX];
 
 	// Usb<0..5>
 	for (int x = 0; x < 6; x++) {
 		if (no_prefix_check) {
-			snprintf(temp_dir, 1024, "%s%d/%s", "../usb", x, dir);
+			snprintf(temp_dir, sizeof(temp_dir), "%s%d/%s", "../usb", x, dir);
 			if (isPathDirectory(temp_dir)) {
 				printf("Found USB dir: %s\n", temp_dir);
 				strncpy(dir, temp_dir, dir_len);
@@ -1019,7 +1024,7 @@ static int findPrefixDir(const char *prefix, bool no_prefix_check, char *dir, si
 			}
 		}
 
-		snprintf(temp_dir, 1024, "%s%d/%s/%s", "../usb", x, prefix, dir);
+		snprintf(temp_dir, sizeof(temp_dir), "%s%d/%s/%s", "../usb", x, prefix, dir);
 		if (isPathDirectory(temp_dir)) {
 			printf("Found USB dir: %s\n", temp_dir);
 			strncpy(dir, temp_dir, dir_len);
@@ -1029,7 +1034,7 @@ static int findPrefixDir(const char *prefix, bool no_prefix_check, char *dir, si
 
 	// Network share in /media/network/
 	if (no_prefix_check) {
-		snprintf(temp_dir, 1024, "%s/%s", "../network", dir);
+		snprintf(temp_dir, sizeof(temp_dir), "%s/%s", "../network", dir);
 		if (isPathDirectory(temp_dir)) {
 			printf("Found network dir: %s\n", temp_dir);
 			strncpy(dir, temp_dir, dir_len);
@@ -1038,7 +1043,7 @@ static int findPrefixDir(const char *prefix, bool no_prefix_check, char *dir, si
 	}
 
 	// Network share in /media/network/<prefix>
-	snprintf(temp_dir, 1024, "%s/%s/%s", "../network", prefix, dir);
+	snprintf(temp_dir, sizeof(temp_dir), "%s/%s/%s", "../network", prefix, dir);
 	if (isPathDirectory(temp_dir)) {
 		printf("Found network dir: %s\n", temp_dir);
 		strncpy(dir, temp_dir, dir_len);
@@ -1047,7 +1052,7 @@ static int findPrefixDir(const char *prefix, bool no_prefix_check, char *dir, si
 
 	// CIFS_DIR directory in /media/fat/cifs
 	if (no_prefix_check) {
-		snprintf(temp_dir, 1024, "%s/%s", CIFS_DIR, dir);
+		snprintf(temp_dir, sizeof(temp_dir), "%s/%s", CIFS_DIR, dir);
 		if (isPathDirectory(temp_dir)) {
 			printf("Found CIFS dir: %s\n", temp_dir);
 			strncpy(dir, temp_dir, dir_len);
@@ -1056,7 +1061,7 @@ static int findPrefixDir(const char *prefix, bool no_prefix_check, char *dir, si
 	}
 
 	// CIFS_DIR/<prefix> directory in /media/fat/cifs/<prefix>
-	snprintf(temp_dir, 1024, "%s/%s/%s", CIFS_DIR, prefix, dir);
+	snprintf(temp_dir, sizeof(temp_dir), "%s/%s/%s", CIFS_DIR, prefix, dir);
 	if (isPathDirectory(temp_dir)) {
 		printf("Found CIFS dir: %s\n", temp_dir);
 		strncpy(dir, temp_dir, dir_len);
@@ -1070,7 +1075,7 @@ static int findPrefixDir(const char *prefix, bool no_prefix_check, char *dir, si
 	}
 
 	// media/fat/<prefix>
-	snprintf(temp_dir, 1024, "%s/%s", prefix, dir);
+	snprintf(temp_dir, sizeof(temp_dir), "%s/%s", prefix, dir);
 	if (isPathDirectory(temp_dir)) {
 		printf("Found dir: %s\n", temp_dir);
 		strncpy(dir, temp_dir, dir_len);
@@ -1094,10 +1099,10 @@ void prefixGameDir(char *dir, size_t dir_len)
 {
 	if (!findGamesDir(dir, dir_len))
 	{
-		static char temp_dir[1024];
+		static char temp_dir[APP_PATH_MAX];
 
 		//FileCreatePath(GAMES_DIR);
-		snprintf(temp_dir, 1024, "%s/%s", GAMES_DIR, dir);
+		snprintf(temp_dir, sizeof(temp_dir), "%s/%s", GAMES_DIR, dir);
 		strncpy(dir, temp_dir, dir_len);
 		printf("Prefixed dir to %s\n", temp_dir);
 	}
@@ -1460,7 +1465,7 @@ static std::string escape_special(const std::string& s)
 	std::string result;
 	result.reserve(2 * s.length());
 	bool escape = true;
-	for (char c : s)
+	for (const char c : s)
 	{
 		switch (c)
 		{
@@ -1500,7 +1505,7 @@ static bool read_list(const char *path, const char *filename, std::vector<std::r
 {
 	regex_v.clear();
 
-	char filepath[1024 + 32];
+	char filepath[APP_PATH_MAX + 32]; // headroom for the appended file name
 	snprintf(filepath, sizeof(filepath), "%s/%s", path, filename);
 
 	fileTextReader reader;
@@ -1517,7 +1522,7 @@ static bool read_list(const char *path, const char *filename, std::vector<std::r
 	const char *line;
 	while ((line = FileReadLine(&reader)))
 	{
-		std::string pattern = escape_special(trim(line));
+		const std::string pattern = escape_special(trim(line));
 		if (pattern.empty()) continue;
 		try
 		{
@@ -1547,7 +1552,7 @@ static bool read_hidelist(const char *path, std::vector<std::regex>& hide_regex_
 // Only the existence of the file matters; its content is ignored.
 static bool has_nomedia(const char *path)
 {
-	char filepath[1024 + 32];
+	char filepath[APP_PATH_MAX + 32]; // headroom for the appended file name
 	snprintf(filepath, sizeof(filepath), "%s/%s", path, ".nomedia");
 	return FileExists(filepath);
 }
@@ -1601,8 +1606,8 @@ static bool entry_visible(const dir_filters& filters, const char *name, unsigned
 
 int ScanDirectory(char* path, int mode, const char *extension, int options, const char *prefix, const char *filter)
 {
-	static char file_name[1024];
-	static char full_path[1024];
+	static char file_name[APP_PATH_MAX];
+	static char full_path[APP_PATH_MAX];
 
 	int has_trd = 0;
 	const char *ext = extension;
@@ -2197,7 +2202,7 @@ direntext_t* flist_SelectedItem()
 
 char* flist_GetPrevNext(const char* base_path, const char* file, const char* ext, int next)
 {
-	static char path[1024];
+	static char path[APP_PATH_MAX];
 	snprintf(path, sizeof(path), "%s/%s", base_path, file);
 	char *p = strrchr(path, '/');
 	if (!FileExists(path))

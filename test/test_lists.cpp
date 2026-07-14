@@ -86,6 +86,10 @@ static int FileExists(const char *name, int use_zip = 1)
 	return !stat(name, &st) && S_ISREG(st.st_mode);
 }
 
+/* Mirrors the application-specific constant defined near the top of
+ * file_io.cpp (outside the extracted block). */
+#define APP_PATH_MAX 1024
+
 #include "helpers.inc"
 
 /* ---- test scaffolding ---- */
