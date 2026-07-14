@@ -1455,7 +1455,7 @@ static std::string trim(const char *s)
 // Escapes special characters of ECMAScript regex syntax, so that patterns
 // match literally by default. Content inside `...` quotes is not escaped
 // (copied as is), allowing raw regex fragments to be embedded.
-static std::string escape_special(const std::string &s)
+static std::string escape_special(const std::string& s)
 {
 	std::string result;
 	result.reserve(2 * s.length());
@@ -1496,7 +1496,7 @@ static std::string escape_special(const std::string &s)
 // Generic function that reads and parses a .showlist or .hidelist file.
 // Returns true iff the file exists; regex_v receives its patterns.
 // Note that FileReadLine() skips empty lines and #/; comment lines.
-static bool read_list(const char *path, const char *filename, std::vector<std::regex> &regex_v)
+static bool read_list(const char *path, const char *filename, std::vector<std::regex>& regex_v)
 {
 	regex_v.clear();
 
@@ -1523,7 +1523,7 @@ static bool read_list(const char *path, const char *filename, std::vector<std::r
 		{
 			regex_v.push_back(std::regex(pattern));
 		}
-		catch (std::regex_error &)
+		catch (std::regex_error&)
 		{
 			printf("Invalid pattern in %s: %s\n", filepath, line);
 		}
@@ -1532,13 +1532,13 @@ static bool read_list(const char *path, const char *filename, std::vector<std::r
 }
 
 // Reads and parses the .showlist file, populating the show_regex_v argument.
-static bool read_showlist(const char *path, std::vector<std::regex> &show_regex_v)
+static bool read_showlist(const char *path, std::vector<std::regex>& show_regex_v)
 {
 	return read_list(path, ".showlist", show_regex_v);
 }
 
 // Reads and parses the .hidelist file, populating the hide_regex_v argument.
-static bool read_hidelist(const char *path, std::vector<std::regex> &hide_regex_v)
+static bool read_hidelist(const char *path, std::vector<std::regex>& hide_regex_v)
 {
 	return read_list(path, ".hidelist", hide_regex_v);
 }
@@ -1558,13 +1558,13 @@ struct dir_filters
 {
 	std::vector<std::regex> show_regex_v;
 	std::vector<std::regex> hide_regex_v;
-	bool showlist_present = false;
-	bool hidelist_present = false;
-	bool nomedia_present = false;
+	bool showlist_present;
+	bool hidelist_present;
+	bool nomedia_present;
 };
 
 // Reads the .showlist, .hidelist and .nomedia filters of the given directory.
-static void read_filters(const char *path, dir_filters &filters)
+static void read_filters(const char *path, dir_filters& filters)
 {
 	filters.showlist_present = read_showlist(path, filters.show_regex_v);
 	filters.hidelist_present = read_hidelist(path, filters.hide_regex_v);
@@ -1572,7 +1572,7 @@ static void read_filters(const char *path, dir_filters &filters)
 }
 
 // Decides whether a directory entry is visible according to the filters.
-static bool entry_visible(const dir_filters &filters, const char *name, unsigned char d_type)
+static bool entry_visible(const dir_filters& filters, const char *name, unsigned char d_type)
 {
 	// A .nomedia marker hides all regular files within the directory,
 	// whereas subfolders remain visible.
@@ -1685,8 +1685,8 @@ int ScanDirectory(char* path, int mode, const char *extension, int options, cons
 
 		// Visibility filters (.showlist/.hidelist/.nomedia) of the scanned
 		// directory, cf. Main_MiSTer issue #443.
-		// @TODO: Currently, this does not work for zipped folders yet!
-		dir_filters filters;
+		// TODO: Currently, this does not work for zipped folders yet!
+		dir_filters filters = {};
 		if (!is_zipped) read_filters(full_path, filters);
 
 		struct dirent64 *de = nullptr;
