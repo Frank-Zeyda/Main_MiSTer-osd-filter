@@ -33,6 +33,7 @@ MiSTer
 # Added by Frank Zeyda
 toolchain/
 /test/helpers.inc
+/test/filereadline.inc
 /test/test_lists
 /test/testdir
 /test/test_lists_cov

@@ -24,10 +24,17 @@ helpers.inc: ../file_io.cpp
 	@grep -q "entry_visible" $@ || \
 		{ echo "ERROR: helper extraction from file_io.cpp failed (markers moved?)"; rm -f $@; exit 1; }
 
-test_lists: test_lists.cpp helpers.inc
+# FileReadLine() and its whitespace macros are extracted verbatim as well,
+# so the suite cannot drift from the reader semantics the firmware uses.
+filereadline.inc: ../file_io.cpp
+	sed -n '/^\#define IS_NEWLINE/,/^}/p' $< > $@
+	@grep -q "FileReadLine" $@ || \
+		{ echo "ERROR: FileReadLine extraction from file_io.cpp failed (markers moved?)"; rm -f $@; exit 1; }
+
+test_lists: test_lists.cpp helpers.inc filereadline.inc
 	$(CXX) -std=gnu++14 -Wall -Wextra -o $@ $<
 
-coverage: test_lists.cpp helpers.inc
+coverage: test_lists.cpp helpers.inc filereadline.inc
 	$(CXX) -std=gnu++14 -Wall -Wextra -fprofile-instr-generate -fcoverage-mapping -o test_lists_cov test_lists.cpp
 	LLVM_PROFILE_FILE=test_lists.profraw ./test_lists_cov > /dev/null
 	$(LLVM_PROFDATA) merge -sparse test_lists.profraw -o test_lists.profdata
@@ -36,6 +43,6 @@ coverage: test_lists.cpp helpers.inc
 	@echo "Line-by-line coverage of the extracted helpers written to coverage.txt"
 
 clean:
-	rm -rf helpers.inc test_lists testdir test_lists_cov test_lists.profraw test_lists.profdata coverage.txt
+	rm -rf helpers.inc filereadline.inc test_lists testdir test_lists_cov test_lists.profraw test_lists.profdata coverage.txt
 
 .PHONY: test coverage clean

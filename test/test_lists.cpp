@@ -9,10 +9,12 @@
  * the code that ships in the MiSTer binary — including entry_visible(), the
  * per-entry decision function used by ScanDirectory().
  *
- * The MiSTer file-I/O facilities used by that code (fileTextReader et al.)
- * are provided as host stand-ins below with the same observable semantics
- * as the originals in file_io.cpp; FileReadLine() is a verbatim copy of the
- * upstream implementation.
+ * The MiSTer file-I/O facilities used by that code are treated as follows:
+ * FileReadLine() and its whitespace macros are ALSO extracted verbatim from
+ * ../file_io.cpp (filereadline.inc), so the reader semantics cannot drift;
+ * FileOpenTextReader() and FileExists() are host stand-ins below with the
+ * same observable semantics as the originals (they cannot be extracted, as
+ * they depend on the firmware's fileTYPE machinery).
  *
  * Conventions
  * -----------
@@ -73,31 +75,9 @@ static bool FileOpenTextReader(fileTextReader *reader, const char *filename)
 	return true;
 }
 
-#define IS_NEWLINE(c) (((c) == '\r') || ((c) == '\n'))
-#define IS_WHITESPACE(c) (IS_NEWLINE(c) || ((c) == ' ') || ((c) == '\t'))
-
-/* Verbatim copy of FileReadLine() from upstream file_io.cpp. */
-static const char *FileReadLine(fileTextReader *reader)
-{
-	const char *end = reader->buffer + reader->size;
-	while (reader->pos < end)
-	{
-		char *st = reader->pos;
-		while ((reader->pos < end) && *reader->pos && !IS_NEWLINE(*reader->pos))
-			reader->pos++;
-		*reader->pos = 0;
-		while (IS_WHITESPACE(*st)) st++;
-		if (*st == '#' || *st == ';' || !*st)
-		{
-			reader->pos++;
-		}
-		else
-		{
-			return st;
-		}
-	}
-	return nullptr;
-}
+/* FileReadLine() and the IS_NEWLINE/IS_WHITESPACE macros, extracted
+ * verbatim from ../file_io.cpp by the Makefile. */
+#include "filereadline.inc"
 
 static int FileExists(const char *name, int use_zip = 1)
 {
