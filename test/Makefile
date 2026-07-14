@@ -4,6 +4,8 @@
 # that ships in the MiSTer binary. Runs with any host C++14 compiler:
 #
 #   make -C test           (build and run)
+#   make -C test sanitize  (run the suite under AddressSanitizer and
+#                           UndefinedBehaviorSanitizer)
 #   make -C test coverage  (line/region coverage of the extracted helpers;
 #                           requires clang with llvm-cov and llvm-profdata,
 #                           found via xcrun on macOS)
@@ -34,6 +36,10 @@ filereadline.inc: ../file_io.cpp
 test_lists: test_lists.cpp helpers.inc filereadline.inc
 	$(CXX) -std=gnu++14 -Wall -Wextra -o $@ $<
 
+sanitize: test_lists.cpp helpers.inc filereadline.inc
+	$(CXX) -std=gnu++14 -Wall -Wextra -g -fsanitize=address,undefined -fno-sanitize-recover=all -o test_lists_san test_lists.cpp
+	./test_lists_san
+
 coverage: test_lists.cpp helpers.inc filereadline.inc
 	$(CXX) -std=gnu++14 -Wall -Wextra -fprofile-instr-generate -fcoverage-mapping -o test_lists_cov test_lists.cpp
 	LLVM_PROFILE_FILE=test_lists.profraw ./test_lists_cov > /dev/null
@@ -43,6 +49,6 @@ coverage: test_lists.cpp helpers.inc filereadline.inc
 	@echo "Line-by-line coverage of the extracted helpers written to coverage.txt"
 
 clean:
-	rm -rf helpers.inc filereadline.inc test_lists testdir test_lists_cov test_lists.profraw test_lists.profdata coverage.txt
+	rm -rf helpers.inc filereadline.inc test_lists testdir test_lists_cov test_lists_san test_lists.profraw test_lists.profdata coverage.txt
 
-.PHONY: test coverage clean
+.PHONY: test sanitize coverage clean
