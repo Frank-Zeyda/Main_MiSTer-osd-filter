@@ -253,6 +253,65 @@ static void test_escape_regex_regions()
 		"no length limit on patterns");
 }
 
+/* Deterministic pseudo-random generator (LCG) for the property test:
+ * a fixed seed keeps every run reproducible. */
+static unsigned lcg_next(unsigned& state)
+{
+	state = state * 1664525u + 1013904223u;
+	return state >> 16;
+}
+
+/*
+ * Test case: test_literal_identity_property
+ *
+ * Description   - property-based check of the feature's core invariant:
+ *                 for ANY name not containing a backtick, escape_special()
+ *                 yields a regex that matches exactly that name — no more,
+ *                 no less (literal identity).
+ * Context       - the per-character tests above verify each metacharacter
+ *                 individually; this sweeps the whole printable-ASCII
+ *                 space in combination, catching any escape that was not
+ *                 thought of explicitly.
+ * Preconditions - none (pure functions; fixed PRNG seed 20260713 makes
+ *                 the run fully reproducible).
+ * Inputs        - 2000 pseudo-random names of 1..24 printable ASCII
+ *                 characters (backticks excluded by construction).
+ * Expected      - every name matches its own escaped pattern, every
+ *                 pattern compiles, and appending one character always
+ *                 breaks the (full-name) match.
+ * Abnormal      - a std::regex_error during compilation counts as a
+ *                 property violation (tallied, reported via the checks).
+ */
+static void test_literal_identity_property()
+{
+	begin_test("property: literal identity for backtick-free names");
+	unsigned state = 20260713u;
+	const int N = 2000;
+	int compiled = 0, matched = 0, longer_rejected = 0;
+	for (int i = 0; i < N; i++)
+	{
+		int len = 1 + lcg_next(state) % 24;
+		std::string name;
+		for (int j = 0; j < len; j++)
+		{
+			char c = (char)(32 + lcg_next(state) % 95); /* printable ASCII */
+			if (c == '`') c = 'x';                      /* exclude backticks */
+			name += c;
+		}
+		try
+		{
+			std::regex re(escape_special(name));
+			compiled++;
+			if (std::regex_match(name, re)) matched++;
+			if (!std::regex_match(name + "!", re)) longer_rejected++;
+		}
+		catch (std::regex_error&) { /* counted via compiled */ }
+	}
+	CHECK(compiled == N, "every escaped name compiles as a regex");
+	CHECK(matched == N, "every name matches its own escaped pattern");
+	CHECK(longer_rejected == N, "appending a character always breaks the match");
+}
+
 /*
  * Test case: test_read_list_format
  *
@@ -546,11 +605,83 @@ static void test_entry_visible_no_filters()
 	CHECK(entry_visible(f, "..", DT_DIR), "parent entry visible");
 }
 
+/*
+ * Test case: test_readme_examples
+ *
+ * Description   - the example list files given in ../README.md work
+ *                 exactly as the README describes.
+ * Context       - documentation-drift guard: if the feature's behaviour
+ *                 or the README's examples change independently, this
+ *                 test fails. KEEP IN SYNC with README.md, "Examples".
+ * Preconditions - fixture testdir/ freshly created per example.
+ * Inputs        - (1) the games/Genesis .showlist example (two literal
+ *                 names plus a `Micro Machines.*` regex); (2) the BIOS
+ *                 .hidelist example; (3) the main-menu .hidelist example.
+ * Expected      - (1) both literals and a "Micro Machines ..." title are
+ *                 visible, another game is hidden; (2) BIOS-named files
+ *                 in any casing and the wip folder are hidden, a game
+ *                 stays visible; (3) _Utility and _Console are hidden,
+ *                 another section and ".." stay visible.
+ * Abnormal      - none.
+ */
+static void test_readme_examples()
+{
+	begin_test("README examples behave as documented");
+
+	reset_fixture();
+	write_file("testdir/.showlist",
+		"Sonic The Hedgehog (USA, Europe).md\n"
+		"Streets of Rage 2 (USA).md\n"
+		"`Micro Machines.*`\n");
+	dir_filters f1;
+	read_filters("testdir", f1);
+	CHECK(entry_visible(f1, "Sonic The Hedgehog (USA, Europe).md", DT_REG),
+		"Genesis example: first literal visible");
+	CHECK(entry_visible(f1, "Streets of Rage 2 (USA).md", DT_REG),
+		"Genesis example: second literal visible");
+	CHECK(entry_visible(f1, "Micro Machines 2 - Turbo Tournament (Europe).md", DT_REG),
+		"Genesis example: regex admits Micro Machines titles");
+	CHECK(!entry_visible(f1, "Golden Axe (World).md", DT_REG),
+		"Genesis example: unlisted game hidden");
+
+	reset_fixture();
+	write_file("testdir/.hidelist",
+		"`.*[Bb][Ii][Oo][Ss].*`\n"
+		"wip\n");
+	dir_filters f2;
+	read_filters("testdir", f2);
+	CHECK(!entry_visible(f2, "Genesis_BIOS.rom", DT_REG),
+		"BIOS example: upper-case BIOS file hidden");
+	CHECK(!entry_visible(f2, "bios_CD_E.bin", DT_REG),
+		"BIOS example: lower-case bios file hidden");
+	CHECK(!entry_visible(f2, "wip", DT_DIR),
+		"BIOS example: work folder hidden");
+	CHECK(entry_visible(f2, "Comix Zone (USA).md", DT_REG),
+		"BIOS example: ordinary game visible");
+
+	reset_fixture();
+	write_file("testdir/.hidelist",
+		"_Utility\n"
+		"_Console\n");
+	dir_filters f3;
+	read_filters("testdir", f3);
+	CHECK(!entry_visible(f3, "_Utility", DT_DIR),
+		"main-menu example: _Utility hidden");
+	CHECK(!entry_visible(f3, "_Console", DT_DIR),
+		"main-menu example: _Console hidden");
+	CHECK(entry_visible(f3, "_Arcade", DT_DIR),
+		"main-menu example: other sections visible");
+	CHECK(entry_visible(f3, "..", DT_DIR),
+		"main-menu example: parent entry visible");
+	remove_fixture();
+}
+
 int main()
 {
 	test_trim();
 	test_escape_literal();
 	test_escape_regex_regions();
+	test_literal_identity_property();
 	test_read_list_format();
 	test_read_list_abnormal();
 	test_has_nomedia();
@@ -558,6 +689,7 @@ int main()
 	test_entry_visible_hidelist();
 	test_entry_visible_nomedia();
 	test_entry_visible_no_filters();
+	test_readme_examples();
 
 	printf("\n%d checks, %d failures\n", checks, failures);
 	return failures ? 1 : 0;
