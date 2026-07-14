@@ -161,6 +161,14 @@ docker run --rm -v "$PWD":/src -w /src mister-toolchain \
 The resulting `bin/MiSTer` replaces `/media/fat/MiSTer` on the SD card
 (kill the running `MiSTer` process or reboot afterwards).
 
+The filtering logic is covered by a host-side unit-test suite that extracts
+the helper functions verbatim from `file_io.cpp` and exercises them with any
+C++14 compiler — no cross-toolchain or MiSTer hardware required:
+
+```
+make -C test
+```
+
 ## Relation to upstream
 
 The fork consists of a small, self-contained patch to `file_io.cpp` (plus
