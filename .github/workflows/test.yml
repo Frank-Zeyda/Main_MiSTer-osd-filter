@@ -9,7 +9,7 @@ jobs:
     name: Host unit tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Run unit tests
         run: make -C test
@@ -30,7 +30,7 @@ jobs:
     name: ARM cross-build (MiSTer binary)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Build toolchain image (upstream devcontainer)
         run: docker build -t mister-toolchain .devcontainer
