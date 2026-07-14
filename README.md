@@ -1,4 +1,4 @@
-# Main_MiSTer with `.showlist` / `.hidelist` / `.nomedia` support
+# MiSTer OSD with `.showlist` / `.hidelist` / `.nomedia` support
 
 ![tests](https://github.com/Frank-Zeyda/Main_MiSTer-osd-filter/actions/workflows/test.yml/badge.svg)
 

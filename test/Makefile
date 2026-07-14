@@ -57,6 +57,6 @@ help:
 	@echo "  clean     - remove all generated files"
 
 clean:
-	rm -rf helpers.inc filereadline.inc test_lists testdir test_lists_cov test_lists_san test_lists.profraw test_lists.profdata coverage.txt
+	rm -rf helpers.inc filereadline.inc test_lists testdir test_lists_cov test_lists_san test_lists_san.dSYM test_lists.profraw test_lists.profdata coverage.txt
 
 .PHONY: test sanitize coverage help clean

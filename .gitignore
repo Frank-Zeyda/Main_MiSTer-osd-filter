@@ -38,6 +38,7 @@ toolchain/
 /test/testdir
 /test/test_lists_cov
 /test/test_lists_san
+/test/*.dSYM
 /test/*.profraw
 /test/*.profdata
 /test/coverage.txt
