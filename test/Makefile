@@ -48,7 +48,15 @@ coverage: test_lists.cpp helpers.inc filereadline.inc
 	$(LLVM_COV) show ./test_lists_cov -instr-profile=test_lists.profdata helpers.inc > coverage.txt
 	@echo "Line-by-line coverage of the extracted helpers written to coverage.txt"
 
+help:
+	@echo "Available targets:"
+	@echo "  test      - build and run the unit-test suite (default)"
+	@echo "  sanitize  - run the suite under AddressSanitizer/UBSan"
+	@echo "  coverage  - line/region coverage report of the extracted helpers"
+	@echo "  help      - show this help"
+	@echo "  clean     - remove all generated files"
+
 clean:
 	rm -rf helpers.inc filereadline.inc test_lists testdir test_lists_cov test_lists_san test_lists.profraw test_lists.profdata coverage.txt
 
-.PHONY: test sanitize coverage clean
+.PHONY: test sanitize coverage help clean

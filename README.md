@@ -163,13 +163,21 @@ docker run --rm -v "$PWD":/src -w /src mister-toolchain \
 The resulting `bin/MiSTer` replaces `/media/fat/MiSTer` on the SD card
 (kill the running `MiSTer` process or reboot afterwards).
 
-The filtering logic is covered by a host-side unit-test suite that extracts
-the helper functions verbatim from `file_io.cpp` and exercises them with any
-C++14 compiler — no cross-toolchain or MiSTer hardware required:
+The filtering logic is covered by a documented host-side unit-test suite
+(84 checks, including property-based tests) that extracts the helper
+functions verbatim from `file_io.cpp` at build time and exercises them with
+any C++14 compiler — no cross-toolchain or MiSTer hardware required:
 
 ```
-make -C test
+make -C test            # build and run the suite (see 'make -C test help')
+make -C test sanitize   # same, under AddressSanitizer/UBSan
+make -C test coverage   # coverage report of the extracted helpers
 ```
+
+The suite holds 100% line and branch coverage of the extracted helpers and
+runs clean under the sanitizers. Continuous integration enforces all of
+this — plus the full ARM cross-build above — on every push (see the badge
+at the top of this page).
 
 ## Relation to upstream
 
