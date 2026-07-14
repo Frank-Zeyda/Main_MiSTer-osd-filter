@@ -11,6 +11,9 @@
 #                           found via xcrun on macOS)
 #   make -C test clean
 
+# Fail if any command in a pipe fails (same convention as the root Makefile).
+SHELL = /bin/bash -o pipefail
+
 CXX ?= c++
 
 # Coverage toolchain: use llvm-cov/llvm-profdata from PATH if available,
@@ -40,13 +43,16 @@ sanitize: test_lists.cpp helpers.inc filereadline.inc
 	$(CXX) -std=gnu++14 -Wall -Wextra -g -fsanitize=address,undefined -fno-sanitize-recover=all -o test_lists_san test_lists.cpp
 	./test_lists_san
 
+# -fcoverage-compilation-dir=. records the compilation directory as '.',
+# so llvm-cov reports short relative paths (and sizes its table for them)
+# instead of absolute ones.
 coverage: test_lists.cpp helpers.inc filereadline.inc
-	$(CXX) -std=gnu++14 -Wall -Wextra -fprofile-instr-generate -fcoverage-mapping -o test_lists_cov test_lists.cpp
+	$(CXX) -std=gnu++14 -Wall -Wextra -fprofile-instr-generate -fcoverage-mapping -fcoverage-compilation-dir=. -o test_lists_cov test_lists.cpp
 	LLVM_PROFILE_FILE=test_lists.profraw ./test_lists_cov > /dev/null
 	$(LLVM_PROFDATA) merge -sparse test_lists.profraw -o test_lists.profdata
-	$(LLVM_COV) report ./test_lists_cov -instr-profile=test_lists.profdata helpers.inc
-	$(LLVM_COV) show ./test_lists_cov -instr-profile=test_lists.profdata helpers.inc > coverage.txt
-	@echo "Line-by-line coverage of the extracted helpers written to coverage.txt"
+	$(LLVM_COV) report ./test_lists_cov -instr-profile=test_lists.profdata -ignore-filename-regex='test_lists\.cpp'
+	$(LLVM_COV) show ./test_lists_cov -instr-profile=test_lists.profdata -ignore-filename-regex='test_lists\.cpp' > coverage.txt
+	@echo "Line-by-line coverage of the extracted code written to coverage.txt"
 
 help:
 	@echo "Available targets:"
