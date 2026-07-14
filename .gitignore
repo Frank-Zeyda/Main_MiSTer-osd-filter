@@ -35,3 +35,7 @@ toolchain/
 /test/helpers.inc
 /test/test_lists
 /test/testdir
+/test/test_lists_cov
+/test/*.profraw
+/test/*.profdata
+/test/coverage.txt

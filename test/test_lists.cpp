@@ -1,12 +1,35 @@
-/* Host-side unit tests for the .showlist/.hidelist/.nomedia helper logic.
- * The tested functions are included VERBATIM from ../file_io.cpp via
- * helpers.inc (extracted by the accompanying Makefile), so this exercises
- * the shipped code — including the real entry_visible() used by
- * ScanDirectory().
+/*
+ * Host-side unit tests for the .showlist/.hidelist/.nomedia helper logic
+ * of ../file_io.cpp.
  *
- * The house I/O facilities (fileTextReader et al.) are stubbed below with
- * the same semantics as the originals in file_io.cpp; FileReadLine() is a
- * verbatim copy of the upstream implementation. */
+ * Test context
+ * ------------
+ * The functions under test are extracted VERBATIM from ../file_io.cpp into
+ * helpers.inc by the accompanying Makefile, so this suite exercises exactly
+ * the code that ships in the MiSTer binary — including entry_visible(), the
+ * per-entry decision function used by ScanDirectory().
+ *
+ * The MiSTer file-I/O facilities used by that code (fileTextReader et al.)
+ * are provided as host stand-ins below with the same observable semantics
+ * as the originals in file_io.cpp; FileReadLine() is a verbatim copy of the
+ * upstream implementation.
+ *
+ * Conventions
+ * -----------
+ * Each test case is a function named test_*, preceded by a comment block
+ * documenting:
+ *
+ *   Description   - the property being verified
+ *   Context       - why the property matters for the OSD file browser
+ *   Preconditions - required initial state (fixture files, environment)
+ *   Inputs        - the concrete inputs exercised
+ *   Expected      - expected outputs and/or state changes
+ *   Abnormal      - error/edge behaviour deliberately provoked (if any)
+ *
+ * Test cases are self-contained: each one (re)creates the shared fixture
+ * directory testdir/ as documented in its Preconditions and never relies
+ * on files written by another test case. Run via: make -C test
+ */
 #include <cstdio>
 #include <cstring>
 #include <cctype>
@@ -96,6 +119,35 @@ static int checks = 0;
 	else { printf("ok:   %s\n", msg); } \
 } while (0)
 
+/* Prints a banner identifying the running test case. */
+static void begin_test(const char *name)
+{
+	printf("\n--- %s ---\n", name);
+}
+
+/* (Re)creates an empty fixture directory testdir/. */
+static void reset_fixture()
+{
+	system("rm -rf testdir && mkdir -p testdir");
+}
+
+/* Removes the fixture directory. */
+static void remove_fixture()
+{
+	system("rm -rf testdir");
+}
+
+/* Creates a file with the given (binary-exact) content. */
+static void write_file(const std::string& path, const std::string& content)
+{
+	FILE *f = fopen(path.c_str(), "wb");
+	fwrite(content.data(), 1, content.size(), f);
+	fclose(f);
+}
+
+/* Test utility mirroring read_list()'s per-line pipeline: a single list
+ * line is trimmed and escaped, then regex-matched against a full name.
+ * Returns false (rather than aborting) for invalid regex patterns. */
 static bool matches(const char *line, const char *name)
 {
 	std::string pattern = escape_special(trim(line));
@@ -107,176 +159,425 @@ static bool matches(const char *line, const char *name)
 	}
 }
 
-static void write_file(const std::string& path, const std::string& content)
+/*
+ * Test case: test_trim
+ *
+ * Description   - trim() returns a copy of its argument with leading and
+ *                 trailing whitespace removed and interior whitespace kept.
+ * Context       - every line of a .showlist/.hidelist is trimmed before
+ *                 escaping, so patterns must tolerate editor padding and
+ *                 carriage returns (FileReadLine() strips \r\n at line
+ *                 breaks, but a lone trailing \r must not reach the regex).
+ * Preconditions - none (pure function).
+ * Inputs        - strings with spaces/tabs/CR at either end, interior
+ *                 whitespace, an empty string, an all-whitespace string.
+ * Expected      - padding removed; interior whitespace preserved; empty
+ *                 and all-whitespace inputs yield the empty string.
+ * Abnormal      - empty/all-whitespace inputs must not crash (an earlier
+ *                 implementation had undefined pointer arithmetic for "").
+ */
+static void test_trim()
 {
-	FILE *f = fopen(path.c_str(), "wb");
-	fwrite(content.data(), 1, content.size(), f);
-	fclose(f);
+	begin_test("trim");
+	CHECK(trim("  hello  ") == "hello", "strips spaces both sides");
+	CHECK(trim("hello") == "hello", "leaves clean string alone");
+	CHECK(trim("") == "", "handles empty string");
+	CHECK(trim("   \t ") == "", "handles all-whitespace string");
+	CHECK(trim("name\r") == "name", "strips trailing CR");
+	CHECK(trim("\ta b\t") == "a b", "keeps interior whitespace");
+}
+
+/*
+ * Test case: test_escape_literal
+ *
+ * Description   - escape_special() escapes every ECMAScript regex
+ *                 metacharacter outside backtick regions, so that plain
+ *                 lines match file names literally.
+ * Context       - ROM names are full of ()[]{}.+ etc.; users writing plain
+ *                 names into a list must not trip over regex semantics.
+ * Preconditions - none (pure function).
+ * Inputs        - names containing ( ) [ ] { } . * + ? ^ $ and a
+ *                 backslash — every character escape_special() escapes.
+ * Expected      - each name regex-matches itself and only itself; regex
+ *                 metacharacters have no special effect.
+ * Abnormal      - none.
+ */
+static void test_escape_literal()
+{
+	begin_test("escape_special: literal by default");
+	CHECK(matches("Sonic (USA) [!].bin", "Sonic (USA) [!].bin"),
+		"name with ()[]. matches itself");
+	CHECK(!matches("file.txt", "fileAtxt"),
+		"dot is escaped (no wildcard meaning)");
+	CHECK(!matches("Sonic (USA) [!].bin", "Sonic (USA) [x].bin"),
+		"brackets are escaped (no char-class meaning)");
+	CHECK(matches("C++ (v1.2) {beta}", "C++ (v1.2) {beta}"),
+		"plus, parens, braces escaped");
+	CHECK(!matches("game*", "gamex"),
+		"star is escaped (no repetition meaning)");
+	CHECK(matches("game*", "game*"),
+		"star matches literal star");
+	CHECK(matches("a\\b", "a\\b"),
+		"backslash is escaped (matches a literal backslash)");
+	CHECK(!matches("a\\b", "ab"),
+		"escaped backslash does not act as a regex escape");
+	CHECK(matches("^start$", "^start$"),
+		"caret and dollar are escaped (match literally)");
+	CHECK(!matches("^start$", "start"),
+		"escaped caret/dollar do not act as anchors");
+	CHECK(matches("what?", "what?"),
+		"question mark is escaped (matches literally)");
+	CHECK(!matches("what?", "wha"),
+		"escaped question mark does not make 't' optional");
+}
+
+/*
+ * Test case: test_escape_regex_regions
+ *
+ * Description   - content between backticks passes through unescaped, so
+ *                 raw ECMAScript regex fragments can be embedded in a line;
+ *                 the backticks themselves are dropped from the pattern.
+ * Context       - this is the feature's "advanced mode" (cf. issue #443):
+ *                 e.g. `.*\.mra` in a .hidelist hides all MRA files.
+ * Preconditions - none (pure function).
+ * Inputs        - lines mixing literal text with one or more `...` regions,
+ *                 an unmatched (unterminated) backtick, adjacent backticks,
+ *                 a 10000-character line.
+ * Expected      - regex constructs work inside regions and are literal
+ *                 outside; mixed lines anchor the literal part exactly.
+ * Abnormal      - an unmatched backtick opens a region that extends to the
+ *                 end of the line (documented behaviour, not an error); a
+ *                 line of two backticks escapes to the empty pattern.
+ */
+static void test_escape_regex_regions()
+{
+	begin_test("escape_special: backtick regex regions");
+	CHECK(matches("`.*`.bin", "foo.bin"),
+		"region passes .* through as regex");
+	CHECK(!matches("`.*`.bin", "foo_bin"),
+		"dot outside region remains literal");
+	CHECK(matches("Super `.*`", "Super Mario World.sfc"),
+		"literal prefix plus regex suffix");
+	CHECK(!matches("Super `.*`", "Duper Mario"),
+		"literal prefix must match exactly");
+	CHECK(matches("`(foo|bar)` fighters", "bar fighters"),
+		"alternation inside region");
+	CHECK(escape_special("a`b`c") == "abc",
+		"backticks themselves are dropped");
+	CHECK(matches("`.*", "anything at all"),
+		"unmatched backtick: region extends to end of line");
+	CHECK(escape_special("``") == "",
+		"two adjacent backticks yield the empty pattern");
+	std::string longline(10000, 'x');
+	CHECK(escape_special(longline).length() == 10000,
+		"no length limit on patterns");
+}
+
+/*
+ * Test case: test_read_list_format
+ *
+ * Description   - read_list() (via read_showlist()) parses a list file
+ *                 into compiled regex patterns, applying the documented
+ *                 file format: UTF-8 BOM tolerated, CRLF line endings,
+ *                 #/; comment lines, blank lines, whitespace-padded
+ *                 entries, and backtick regex lines.
+ * Context       - list files are typically created on a PC (Windows
+ *                 editors add BOM and CRLF) and copied over Samba; the
+ *                 format must survive that path unchanged.
+ * Preconditions - fixture testdir/ freshly created by this test; a
+ *                 .showlist written with a representative mix of lines.
+ * Inputs        - .showlist containing: BOM prefix, a CRLF literal line,
+ *                 blank and whitespace-only lines, '#' and ';' comments,
+ *                 a raw-regex line, and a padded literal line.
+ * Expected      - the file is reported present; exactly the 3 pattern
+ *                 lines survive; the first pattern matches its name,
+ *                 proving the BOM was stripped rather than glued on.
+ * Abnormal      - none (abnormal lines are covered by the next case).
+ */
+static void test_read_list_format()
+{
+	begin_test("read_list: documented file format");
+	reset_fixture();
+	write_file("testdir/.showlist",
+		"\xEF\xBB\xBF"                /* UTF-8 BOM (Windows editors) */
+		"Sonic (USA).bin\r\n"         /* CRLF line ending */
+		"\n"                          /* blank line: skipped */
+		"   \n"                       /* whitespace-only: skipped */
+		"# a comment line\n"          /* comment: skipped */
+		"  ; another comment\n"       /* comment after whitespace */
+		"`.*\\.(gg|sms)`\n"           /* raw regex line */
+		"  Mario  \n");               /* padded literal */
+	std::vector<std::regex> v;
+	CHECK(read_showlist("testdir", v), "file reported present");
+	CHECK(v.size() == 3, "exactly 3 patterns survive (BOM/comments/blank skipped)");
+	CHECK(v.size() >= 1 && std::regex_match("Sonic (USA).bin", v[0]),
+		"BOM stripped from first pattern");
+	CHECK(v.size() >= 2 && std::regex_match("game.gg", v[1]),
+		"raw regex line compiled and matching");
+	CHECK(v.size() >= 3 && std::regex_match("Mario", v[2]),
+		"padded literal trimmed and matching");
+	remove_fixture();
+}
+
+/*
+ * Test case: test_read_list_abnormal
+ *
+ * Description   - read_list() copes with abnormal inputs: absent files,
+ *                 empty files, invalid regex lines, lines that escape to
+ *                 an empty pattern, very long lines, and tiny files.
+ * Context       - lists are hand-written; a single bad line must neither
+ *                 crash the firmware nor knock out the rest of the file
+ *                 (an earlier implementation silently dropped everything
+ *                 after an over-long line).
+ * Preconditions - fixture testdir/ freshly created by this test; list
+ *                 files written per the inputs below.
+ * Inputs        - (a) no .hidelist at all; (b) a zero-byte .hidelist;
+ *                 (c) a .showlist whose lines are: an invalid raw regex
+ *                 `[`, a line of two backticks, an 8000-character literal,
+ *                 and a normal line after those; (d) a 2-byte file "a\n"
+ *                 (shorter than a BOM).
+ * Expected      - (a) reported not present, no patterns; (b) reported
+ *                 PRESENT with zero patterns — an empty whitelist hides
+ *                 everything, preserving the pre-refactor semantics;
+ *                 (c) the invalid and empty-pattern lines are skipped
+ *                 while the 8000-char line and the following line both
+ *                 survive; (d) parsed as one pattern.
+ * Abnormal      - the invalid `[` line additionally causes a diagnostic
+ *                 on stdout ("Invalid pattern in ..."), mirroring what
+ *                 the firmware writes to the MiSTer log. This warning in
+ *                 the test output is EXPECTED and not a failure.
+ */
+static void test_read_list_abnormal()
+{
+	begin_test("read_list: abnormal inputs");
+	reset_fixture();
+	std::vector<std::regex> v;
+
+	CHECK(!read_hidelist("testdir", v), "absent file reported not present");
+	CHECK(v.empty(), "absent file yields no patterns");
+
+	write_file("testdir/.hidelist", "");
+	CHECK(read_hidelist("testdir", v), "empty file still counts as present");
+	CHECK(v.empty(), "empty file yields no patterns");
+
+	printf("NOTE: the following 'Invalid pattern' warning is intentional:\n");
+	std::string longname(8000, 'x');
+	write_file("testdir/.showlist",
+		"`[`\n"                       /* invalid regex: skipped, warns */
+		"``\n"                        /* escapes to empty pattern: skipped */
+		+ longname + "\n"             /* 8000-char literal line */
+		"afterwards\n");              /* must still be parsed */
+	CHECK(read_showlist("testdir", v), "file with bad lines reported present");
+	CHECK(v.size() == 2, "invalid and empty-pattern lines skipped, others kept");
+	CHECK(v.size() >= 1 && std::regex_match(longname, v[0]),
+		"8000-char line parsed in full");
+	CHECK(v.size() >= 2 && std::regex_match("afterwards", v[1]),
+		"line after the long line still read");
+
+	write_file("testdir/.hidelist", "a\n");
+	CHECK(read_hidelist("testdir", v) && v.size() == 1,
+		"2-byte file (shorter than a BOM) parsed as one pattern");
+	remove_fixture();
+}
+
+/*
+ * Test case: test_has_nomedia
+ *
+ * Description   - has_nomedia() reports whether a directory contains a
+ *                 .nomedia marker file, judging by existence only.
+ * Context       - .nomedia is the zero-cost hiding variant suggested by
+ *                 the upstream maintainer in issue #443; it must work
+ *                 with an empty file created via `touch`.
+ * Preconditions - fixture testdir/ freshly created by this test.
+ * Inputs        - testdir/ without a marker, with a zero-byte marker,
+ *                 with a non-empty marker; a non-existent directory.
+ * Expected      - false / true / true / false respectively: content is
+ *                 ignored, only existence matters.
+ * Abnormal      - a missing directory is indistinguishable from a missing
+ *                 marker (false), by design.
+ */
+static void test_has_nomedia()
+{
+	begin_test("has_nomedia");
+	reset_fixture();
+	CHECK(!has_nomedia("testdir"), "no marker: false");
+	write_file("testdir/.nomedia", "");
+	CHECK(has_nomedia("testdir"), "empty (touch'ed) marker detected");
+	write_file("testdir/.nomedia", "arbitrary content\n");
+	CHECK(has_nomedia("testdir"), "marker content is ignored");
+	CHECK(!has_nomedia("no_such_dir_xyz"), "missing directory: false");
+	remove_fixture();
+}
+
+/*
+ * Test case: test_entry_visible_showlist
+ *
+ * Description   - with only a .showlist present, entry_visible() shows an
+ *                 entry iff it matches at least one pattern; the parent
+ *                 entry ".." is exempt from filtering.
+ * Context       - whitelist semantics: unlisted files AND folders vanish
+ *                 from the OSD, but upward navigation must always work.
+ * Preconditions - fixture testdir/ freshly created with a .showlist of
+ *                 two literals and one raw-regex pattern; no .hidelist,
+ *                 no .nomedia.
+ * Inputs        - listed literal, regex-matched name, padded literal,
+ *                 unlisted file, unlisted directory, "..".
+ * Expected      - read_filters() flags exactly the showlist as present;
+ *                 listed/matched entries are visible; the unlisted file
+ *                 and directory are hidden; ".." stays visible.
+ * Abnormal      - none.
+ */
+static void test_entry_visible_showlist()
+{
+	begin_test("entry_visible: showlist only");
+	reset_fixture();
+	write_file("testdir/.showlist",
+		"Sonic (USA).bin\n"
+		"`.*\\.(gg|sms)`\n"
+		"  Mario  \n");
+	dir_filters f;
+	read_filters("testdir", f);
+	CHECK(f.showlist_present && !f.hidelist_present && !f.nomedia_present,
+		"read_filters flags exactly the present file");
+	CHECK(entry_visible(f, "Sonic (USA).bin", DT_REG), "listed literal visible");
+	CHECK(entry_visible(f, "game.gg", DT_REG), "regex-matched file visible");
+	CHECK(entry_visible(f, "Mario", DT_REG), "padded literal visible");
+	CHECK(!entry_visible(f, "Zelda.n64", DT_REG), "unlisted file hidden");
+	CHECK(!entry_visible(f, "unlisted_dir", DT_DIR), "unlisted folder hidden");
+	CHECK(entry_visible(f, "..", DT_DIR), "parent entry ('..') never hidden");
+	remove_fixture();
+}
+
+/*
+ * Test case: test_entry_visible_hidelist
+ *
+ * Description   - .hidelist entries are always hidden, overriding a
+ *                 .showlist match; with only a .hidelist present,
+ *                 everything unlisted stays visible.
+ * Context       - blacklist semantics and their precedence over the
+ *                 whitelist, as documented in the README.
+ * Preconditions - fixture testdir/ freshly created; first with both lists
+ *                 (the showlist admits *.gg and *.sms via regex, and the
+ *                 hidelist hides the same class), then with the .showlist
+ *                 removed.
+ * Inputs        - a file matched by both lists, a file matched only by
+ *                 the showlist, an unlisted file, a hidden folder name.
+ * Expected      - both lists: the doubly-matched file is hidden, the
+ *                 showlist-only file visible. Hidelist only: unlisted
+ *                 entries visible by default, the listed folder hidden.
+ * Abnormal      - none.
+ */
+static void test_entry_visible_hidelist()
+{
+	begin_test("entry_visible: hidelist overrides / hidelist only");
+	reset_fixture();
+	write_file("testdir/.showlist",
+		"Sonic (USA).bin\n"
+		"`.*\\.(gg|sms)`\n");
+	write_file("testdir/.hidelist",
+		"`.*\\.(gg|sms)`\n"
+		"secret folder\n");
+	dir_filters f;
+	read_filters("testdir", f);
+	CHECK(f.showlist_present && f.hidelist_present, "both lists found");
+	CHECK(!entry_visible(f, "game.gg", DT_REG),
+		"hidelist overrides showlist match");
+	CHECK(entry_visible(f, "Sonic (USA).bin", DT_REG),
+		"file not matching hide patterns stays visible");
+
+	system("rm -f testdir/.showlist");
+	dir_filters f2;
+	read_filters("testdir", f2);
+	CHECK(!f2.showlist_present && f2.hidelist_present, "only .hidelist present");
+	CHECK(entry_visible(f2, "anything.rom", DT_REG),
+		"hidelist only: unlisted entries visible by default");
+	CHECK(!entry_visible(f2, "secret folder", DT_DIR),
+		"hidelist only: listed folder hidden");
+	remove_fixture();
+}
+
+/*
+ * Test case: test_entry_visible_nomedia
+ *
+ * Description   - a .nomedia marker hides all regular files while leaving
+ *                 subfolders and ".." visible; it takes precedence over a
+ *                 .showlist (which cannot resurrect a hidden file) and
+ *                 leaves directories subject to list filtering.
+ * Context       - the issue #443 use case: hide an auto-updated MRA list
+ *                 wholesale while keeping curated subfolders navigable.
+ * Preconditions - fixture testdir/ freshly created with a .nomedia
+ *                 marker; a .showlist is added for the precedence checks.
+ * Inputs        - a regular file, a subfolder, "..", a showlisted file,
+ *                 an unlisted folder.
+ * Expected      - marker alone: files hidden, folders and ".." visible.
+ *                 Marker + showlist: the showlisted file is still hidden
+ *                 (the marker wins for files); the unlisted folder is
+ *                 hidden (lists still apply to folders).
+ * Abnormal      - none.
+ */
+static void test_entry_visible_nomedia()
+{
+	begin_test("entry_visible: .nomedia marker");
+	reset_fixture();
+	write_file("testdir/.nomedia", "");
+	dir_filters f;
+	read_filters("testdir", f);
+	CHECK(!f.showlist_present && !f.hidelist_present && f.nomedia_present,
+		"only the marker is present");
+	CHECK(!entry_visible(f, "any.rom", DT_REG), "regular files hidden");
+	CHECK(entry_visible(f, "subfolder", DT_DIR), "subfolders remain visible");
+	CHECK(entry_visible(f, "..", DT_DIR), "parent entry remains visible");
+
+	write_file("testdir/.showlist", "keepme.rom\n");
+	dir_filters f2;
+	read_filters("testdir", f2);
+	CHECK(f2.showlist_present && f2.nomedia_present,
+		"marker and showlist both present");
+	CHECK(!entry_visible(f2, "keepme.rom", DT_REG),
+		"marker beats a matching showlist entry for files");
+	CHECK(!entry_visible(f2, "unlisted_dir", DT_DIR),
+		"folders still subject to showlist filtering");
+	remove_fixture();
+}
+
+/*
+ * Test case: test_entry_visible_no_filters
+ *
+ * Description   - with no filter files at all, every entry is visible.
+ * Context       - the default for every user who does not opt in: the
+ *                 fork must behave exactly like stock firmware.
+ * Preconditions - none; a non-existent directory is queried.
+ * Inputs        - a directory path holding no filter files; arbitrary
+ *                 file, folder and ".." names.
+ * Expected      - read_filters() reports nothing present; entry_visible()
+ *                 returns true for files, folders and "..".
+ * Abnormal      - querying a non-existent directory behaves like an empty
+ *                 one (nothing present), by design.
+ */
+static void test_entry_visible_no_filters()
+{
+	begin_test("entry_visible: no filters (stock behaviour)");
+	dir_filters f;
+	read_filters("no_such_dir_xyz", f);
+	CHECK(!f.showlist_present && !f.hidelist_present && !f.nomedia_present,
+		"nothing reported present");
+	CHECK(entry_visible(f, "whatever.rom", DT_REG), "files visible");
+	CHECK(entry_visible(f, "somedir", DT_DIR), "folders visible");
+	CHECK(entry_visible(f, "..", DT_DIR), "parent entry visible");
 }
 
 int main()
 {
-	/* ---- trim() ---- */
-	{
-		CHECK(trim("  hello  ") == "hello", "trim strips spaces both sides");
-		CHECK(trim("hello") == "hello", "trim leaves clean string alone");
-		CHECK(trim("") == "", "trim handles empty string");
-		CHECK(trim("   \t ") == "", "trim handles all-whitespace string");
-		CHECK(trim("name\r") == "name", "trim strips CR");
-		CHECK(trim("\ta b\t") == "a b", "trim keeps interior whitespace");
-	}
-
-	/* ---- escape_special(): literal-by-default semantics ---- */
-	{
-		CHECK(matches("Sonic (USA) [!].bin", "Sonic (USA) [!].bin"),
-			"literal name with ()[]. matches itself");
-		CHECK(!matches("file.txt", "fileAtxt"),
-			"dot is escaped (no wildcard meaning)");
-		CHECK(!matches("Sonic (USA) [!].bin", "Sonic (USA) [x].bin"),
-			"brackets are escaped (no char-class meaning)");
-		CHECK(matches("C++ (v1.2) {beta}", "C++ (v1.2) {beta}"),
-			"plus, parens, braces escaped");
-		CHECK(!matches("game*", "gamex"),
-			"star is escaped (no repetition meaning)");
-		CHECK(matches("game*", "game*"),
-			"star matches literal star");
-	}
-
-	/* ---- escape_special(): backtick regex regions ---- */
-	{
-		CHECK(matches("`.*`.bin", "foo.bin"),
-			"backtick region passes .* through as regex");
-		CHECK(!matches("`.*`.bin", "foo_bin"),
-			"escaped dot outside region still literal");
-		CHECK(matches("Super `.*`", "Super Mario World.sfc"),
-			"literal prefix plus regex suffix");
-		CHECK(!matches("Super `.*`", "Duper Mario"),
-			"literal prefix must match");
-		CHECK(matches("`(foo|bar)` fighters", "bar fighters"),
-			"alternation inside region");
-		CHECK(escape_special("a`b`c") == "abc",
-			"backticks themselves are dropped from output");
-		std::string longline(10000, 'x');
-		CHECK(escape_special(longline).length() == 10000,
-			"no length limit on patterns anymore");
-	}
-
-	/* ---- read_list(): house-reader semantics ---- */
-	{
-		system("rm -rf testdir && mkdir -p testdir");
-		write_file("testdir/.showlist",
-			"\xEF\xBB\xBF"                /* UTF-8 BOM (Windows editors) */
-			"Sonic (USA).bin\r\n"         /* CRLF line */
-			"\n"                          /* empty line: skipped */
-			"   \n"                       /* whitespace-only: skipped */
-			"# a comment line\n"          /* comment: skipped */
-			"  ; another comment\n"       /* comment after whitespace */
-			"`[`\n"                       /* invalid regex: skipped, warns */
-			"`.*\\.(gg|sms)`\n"           /* raw regex line */
-			"  Mario  \n");               /* padded literal */
-		std::vector<std::regex> v;
-		bool present = read_showlist("testdir", v);
-		CHECK(present, "read_showlist finds the file");
-		CHECK(v.size() == 3, "3 valid patterns (BOM/comments/empty/invalid skipped)");
-		CHECK(std::regex_match("Sonic (USA).bin", v[0]),
-			"BOM stripped from first pattern");
-
-		std::vector<std::regex> h;
-		CHECK(!read_hidelist("testdir", h), "absent .hidelist reported not present");
-		CHECK(h.empty(), "absent list yields no patterns");
-
-		/* an overlong line no longer discards the rest of the file */
-		std::string longname(8000, 'x');
-		write_file("testdir/.hidelist", longname + "\nafterwards\n");
-		CHECK(read_hidelist("testdir", h) && h.size() == 2,
-			"8000-char line parsed, following line still read");
-
-		/* empty list file still counts as present (FileExists fallback) */
-		write_file("testdir/.hidelist", "");
-		CHECK(read_hidelist("testdir", h), "empty list file counts as present");
-		CHECK(h.empty(), "empty list file yields no patterns");
-
-		system("rm -f testdir/.hidelist");
-	}
-
-	/* ---- entry_visible(): the real ScanDirectory decision function ---- */
-	{
-		dir_filters f;
-		read_filters("testdir", f);   /* .showlist from previous block */
-		CHECK(f.showlist_present && !f.hidelist_present && !f.nomedia_present,
-			"read_filters reflects present files");
-		CHECK(entry_visible(f, "Sonic (USA).bin", DT_REG), "showlist: listed literal visible");
-		CHECK(entry_visible(f, "game.gg", DT_REG), "showlist: regex-matched file visible");
-		CHECK(entry_visible(f, "Mario", DT_REG), "showlist: padded literal visible");
-		CHECK(!entry_visible(f, "Zelda.n64", DT_REG), "showlist: unlisted file hidden");
-		CHECK(!entry_visible(f, "unlisted_dir", DT_DIR), "showlist: unlisted folder hidden");
-		CHECK(entry_visible(f, "..", DT_DIR), "showlist: parent dir ('..') never hidden");
-	}
-
-	/* ---- hidelist overrides showlist; hidelist alone ---- */
-	{
-		write_file("testdir/.hidelist",
-			"`.*\\.(gg|sms)`\n"
-			"secret folder\n");
-		dir_filters f;
-		read_filters("testdir", f);
-		CHECK(f.showlist_present && f.hidelist_present, "both lists found");
-		CHECK(!entry_visible(f, "game.gg", DT_REG),
-			"hidelist overrides showlist match");
-		CHECK(entry_visible(f, "Sonic (USA).bin", DT_REG),
-			"shown file not affected by unrelated hide patterns");
-
-		system("rm -f testdir/.showlist");
-		dir_filters f2;
-		read_filters("testdir", f2);
-		CHECK(!f2.showlist_present && f2.hidelist_present, "only .hidelist present");
-		CHECK(entry_visible(f2, "anything.rom", DT_REG),
-			"hidelist-only: unlisted entries visible by default");
-		CHECK(!entry_visible(f2, "secret folder", DT_DIR),
-			"hidelist-only: listed folder hidden");
-		system("rm -f testdir/.hidelist");
-	}
-
-	/* ---- .nomedia marker ---- */
-	{
-		CHECK(!has_nomedia("testdir"), "no marker: has_nomedia is false");
-		write_file("testdir/.nomedia", "");
-		CHECK(has_nomedia("testdir"), "empty .nomedia marker detected");
-		write_file("testdir/.nomedia", "arbitrary content\n");
-		CHECK(has_nomedia("testdir"), "marker content is ignored, existence matters");
-		CHECK(!has_nomedia("no_such_dir_xyz"), "missing dir has no marker");
-
-		dir_filters f;
-		read_filters("testdir", f);
-		CHECK(!f.showlist_present && f.nomedia_present, "only .nomedia present");
-		CHECK(!entry_visible(f, "any.rom", DT_REG),
-			".nomedia: regular files hidden");
-		CHECK(entry_visible(f, "subfolder", DT_DIR),
-			".nomedia: subfolders remain visible");
-		CHECK(entry_visible(f, "..", DT_DIR),
-			".nomedia: parent entry remains visible");
-
-		/* precedence: .showlist cannot resurrect files hidden by .nomedia */
-		write_file("testdir/.showlist", "keepme.rom\n");
-		dir_filters f2;
-		read_filters("testdir", f2);
-		CHECK(f2.showlist_present && f2.nomedia_present, "marker and showlist both present");
-		CHECK(!entry_visible(f2, "keepme.rom", DT_REG),
-			".nomedia beats a matching .showlist entry for files");
-		CHECK(!entry_visible(f2, "unlisted_dir", DT_DIR),
-			"directories still subject to .showlist filtering");
-		system("rm -rf testdir");
-	}
-
-	/* ---- neither list nor marker present ---- */
-	{
-		dir_filters f;
-		read_filters("no_such_dir_xyz", f);
-		CHECK(!f.showlist_present && !f.hidelist_present && !f.nomedia_present,
-			"missing dir: no filters present");
-		CHECK(entry_visible(f, "whatever", DT_REG),
-			"no filters: everything visible (stock behaviour)");
-	}
+	test_trim();
+	test_escape_literal();
+	test_escape_regex_regions();
+	test_read_list_format();
+	test_read_list_abnormal();
+	test_has_nomedia();
+	test_entry_visible_showlist();
+	test_entry_visible_hidelist();
+	test_entry_visible_nomedia();
+	test_entry_visible_no_filters();
 
 	printf("\n%d checks, %d failures\n", checks, failures);
 	return failures ? 1 : 0;

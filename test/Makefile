@@ -3,10 +3,18 @@
 # file_io.cpp into helpers.inc, so the suite exercises exactly the code
 # that ships in the MiSTer binary. Runs with any host C++14 compiler:
 #
-#   make -C test        (build and run)
+#   make -C test           (build and run)
+#   make -C test coverage  (line/region coverage of the extracted helpers;
+#                           requires clang with llvm-cov and llvm-profdata,
+#                           found via xcrun on macOS)
 #   make -C test clean
 
 CXX ?= c++
+
+# Coverage toolchain: use llvm-cov/llvm-profdata from PATH if available,
+# otherwise fall back to xcrun (macOS command-line tools).
+LLVM_PROFDATA ?= $(shell command -v llvm-profdata 2>/dev/null || echo xcrun llvm-profdata)
+LLVM_COV ?= $(shell command -v llvm-cov 2>/dev/null || echo xcrun llvm-cov)
 
 test: test_lists
 	./test_lists
@@ -19,7 +27,15 @@ helpers.inc: ../file_io.cpp
 test_lists: test_lists.cpp helpers.inc
 	$(CXX) -std=gnu++14 -Wall -Wextra -o $@ $<
 
-clean:
-	rm -rf helpers.inc test_lists testdir
+coverage: test_lists.cpp helpers.inc
+	$(CXX) -std=gnu++14 -Wall -Wextra -fprofile-instr-generate -fcoverage-mapping -o test_lists_cov test_lists.cpp
+	LLVM_PROFILE_FILE=test_lists.profraw ./test_lists_cov > /dev/null
+	$(LLVM_PROFDATA) merge -sparse test_lists.profraw -o test_lists.profdata
+	$(LLVM_COV) report ./test_lists_cov -instr-profile=test_lists.profdata helpers.inc
+	$(LLVM_COV) show ./test_lists_cov -instr-profile=test_lists.profdata helpers.inc > coverage.txt
+	@echo "Line-by-line coverage of the extracted helpers written to coverage.txt"
 
-.PHONY: test clean
+clean:
+	rm -rf helpers.inc test_lists testdir test_lists_cov test_lists.profraw test_lists.profdata coverage.txt
+
+.PHONY: test coverage clean
