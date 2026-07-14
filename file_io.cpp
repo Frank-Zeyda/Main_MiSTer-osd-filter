@@ -1468,8 +1468,20 @@ static std::string escape_special(const std::string &s)
 			escape = !escape;
 			break;
 
-		case '^': case '$': case '\\': case '.': case '*': case '+': case '?':
-		case '(': case ')': case '[': case ']': case '{': case '}': case '|':
+		case '^':
+		case '$':
+		case '\\':
+		case '.':
+		case '*':
+		case '+':
+		case '?':
+		case '(':
+		case ')':
+		case '[':
+		case ']':
+		case '{':
+		case '}':
+		case '|':
 			if (escape) result += '\\';
 			// INTENTIONAL FALL-THROUGH
 

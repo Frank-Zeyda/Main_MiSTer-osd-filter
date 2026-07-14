@@ -19,6 +19,7 @@ helpers.inc: ../file_io.cpp
 test_lists: test_lists.cpp helpers.inc
 	$(CXX) -std=gnu++14 -Wall -Wextra -o $@ $<
 
-.PHONY: test clean
 clean:
 	rm -rf helpers.inc test_lists testdir
+
+.PHONY: test clean
